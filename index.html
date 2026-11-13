@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UniMap UCDB</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+html,body,#map{height:100%;margin:0;font:15px system-ui,sans-serif}
+#top{
+  position:absolute;
+  z-index:1000;
+  top:10px;
+  left:60px;
+  right:10px;
+  max-width:400px;
+}
+#q{width:100%;box-sizing:border-box;padding:12px;border:0;border-radius:10px;box-shadow:0 2px 8px #0004;font:inherit}
+#res div{background:#fff;padding:9px 12px;border-top:1px solid #eee;cursor:pointer}
+#add{position:absolute;z-index:1000;left:10px;bottom:24px;padding:10px 14px;border:0;border-radius:8px;background:#0a4da2;color:#fff;font:inherit}
+</style></head>
+<body>
+<div id="map"></div>
+<div id="top"><input id="q" placeholder="Pesquisar no campus…" autocomplete="off"><div id="res"></div></div>
+<button id="add">＋ Adicionar local</button>
+<button id="location" onclick="localizarAluno()">
+  📍 Minha localização
+</button>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="lib.js"></script>
+<script>
+const sb = supabase.createClient(CFG.URL, CFG.KEY), $ = id => document.getElementById(id), {esc} = UM;
+const map = L.map('map').setView([-20.4065, -54.6169], 17);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '© OpenStreetMap'}).addTo(map);
+let P = [], M = {}, adding = false;
+let userMarker = null;
+let userCircle = null;
+
+function localizarAluno() {
+  if (!navigator.geolocation) {
+    alert('Seu navegador não suporta localização.');
+    return;
+  }
+
+  navigator.geolocation.watchPosition(
+    (position) => {
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+
+      if (!userMarker) {
+        userMarker = L.marker([lat, lng])
+          .addTo(map)
+          .bindPopup('Você está aqui!');
+      } else {
+        userMarker.setLatLng([lat, lng]);
+      }
+
+      if (!userCircle) {
+        userCircle = L.circle([lat, lng], {
+          radius: position.coords.accuracy,
+          color: '#1677ff'
+        }).addTo(map);
+      } else {
+        userCircle.setLatLng([lat, lng]);
+        userCircle.setRadius(position.coords.accuracy);
+      }
+    },
+    (error) => {
+      alert('Não foi possível acessar sua localização. Verifique a permissão do navegador.');
+    },
+    {
+      enableHighAccuracy: true
+    }
+  );
+}
+
+async function load() {
+  const {data, error} = await sb.from('places').select('*');
+  if (error) { alert('Não foi possível carregar o mapa.'); return; }
+  P = data;
+  P.forEach(p => {
+    M[p.id] = L.marker([p.lat, p.lng]).addTo(map).bindPopup('<b>' + esc(p.name) + '</b><br>' + esc(p.cat) +
+      '<br><a target="_blank" rel="noopener" href="' + esc(UM.directionsUrl(p.lat, p.lng)) + '">Como chegar</a>');
+  });
+}
+$('q').oninput = () => {
+  $('res').innerHTML = UM.filterPlaces(P, $('q').value).map(p => '<div data-id="' + esc(p.id) + '">' + esc(p.name) + '</div>').join('');
+};
+$('res').onclick = e => {
+  const m = M[e.target.dataset.id]; if (!m) return;
+  map.setView(m.getLatLng(), 19); m.openPopup(); $('res').innerHTML = ''; $('q').value = '';
+};
+$('add').onclick = () => {
+  adding = !adding;
+  $('add').textContent = adding ? 'Toque no mapa…  (cancelar)' : '＋ Adicionar local';
+};
+map.on('click', async e => {
+  if (!adding) return;
+  adding = false; $('add').textContent = '＋ Adicionar local';
+  const name = (prompt('Nome do local:') || '').trim().slice(0, 80);
+  if (!name) return;
+  const {error} = await sb.from('places').insert({name, cat: 'Sugestão', lat: e.latlng.lat, lng: e.latlng.lng, autor: 'aluno', approved: false});
+  alert(error ? 'Não foi possível enviar.' : 'Obrigado! Sua sugestão será analisada antes de aparecer no mapa.');
+});
+load();
+</script></body></html>

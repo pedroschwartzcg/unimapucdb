@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>UniMap UCDB · Admin</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+html,body{height:100%;margin:0;font:15px system-ui,sans-serif}
+.c{display:none;height:100%;align-items:center;justify-content:center;flex-direction:column;gap:12px;text-align:center}
+#ad{display:none;height:100%;grid-template-columns:320px 1fr}
+@media(max-width:800px){#ad{grid-template-columns:1fr;grid-template-rows:45% 55%}}
+#side{overflow:auto;padding:10px;border-right:1px solid #ddd}
+#map{height:100%}
+.r{display:flex;justify-content:space-between;gap:6px;padding:6px 0;border-bottom:1px solid #eee}
+.r small{color:#888}.r button{margin-left:3px}
+button{font:inherit;cursor:pointer}
+.big{padding:12px 18px;border:0;border-radius:8px;background:#0a4da2;color:#fff}
+
+#lg input {
+  width: 260px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font: inherit;
+}
+</style>
+</head>
+<body>
+<div class="c" id="lg">
+  <h2>UniMap · Área restrita</h2>
+  <input id="email" type="email" placeholder="Seu e-mail" required>
+  <input id="password" type="password" placeholder="Sua senha" required>
+  <button class="big" id="login">Entrar</button>
+  <p id="loginError" style="color:#c00"></p>
+</div>
+<div class="c" id="dn"><p id="deny"></p><button class="big" id="out">Sair</button></div>
+<div id="ad">
+  <div id="side">
+    <b>Locais</b> <button id="out2">Sair</button> <button id="imp">Importar JSON</button>
+    <input type="file" id="file" accept=".json" hidden>
+    <p><small>Arraste os pinos para ajustar. Clique duas vezes no mapa para adicionar.</small></p>
+    <div id="list"></div>
+  </div>
+  <div id="map"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="lib.js"></script>
+<script>
+const sb = supabase.createClient(CFG.URL, CFG.KEY), $ = id => document.getElementById(id), {esc} = UM;
+const show = id => { ['lg', 'dn', 'ad'].forEach(k => $(k).style.display = k === id ? (k === 'ad' ? 'grid' : 'flex') : 'none'); };
+const logout = async () => { await sb.auth.signOut(); location.reload(); };
+$('login').onclick = async () => {
+  const email = $('email').value.trim();
+  const password = $('password').value;
+
+  $('loginError').textContent = '';
+
+  const { error } = await sb.auth.signInWithPassword({
+    email,
+    password
+  });
+
+  if (error) {
+    $('loginError').textContent = 'Erro ao entrar: ' + error.message;
+    return;
+  }
+
+  location.reload();
+};
+$('out').onclick = logout; $('out2').onclick = logout;
+
+let map, P = [], M = {};
+async function init() {
+  const {data: {session}} = await sb.auth.getSession();
+  if (!session) return show('lg');
+  if (!UM.isDevEmail(session.user.email, CFG.DEV_EMAIL)) { $('deny').textContent = 'A conta ' + session.user.email + ' não tem acesso.'; return show('dn'); }
+  show('ad');
+  map = L.map('map', {doubleClickZoom: false}).setView([-20.4065, -54.6169], 17);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '© OpenStreetMap'}).addTo(map);
+  map.on('dblclick', async e => {
+    const name = (prompt('Nome do novo local:') || '').trim().slice(0, 80); if (!name) return;
+    const {error} = await sb.from('places').insert({name, cat: 'Bloco', lat: e.latlng.lat, lng: e.latlng.lng, autor: 'dev', approved: true});
+    if (error) alert(error.message); load();
+  });
+  load();
+}
+async function load() {
+  const {data, error} = await sb.from('places').select('*').order('created_at');
+  if (error) return alert(error.message);
+  P = UM.sortPendingFirst(data);
+  Object.values(M).forEach(m => m.remove()); M = {};
+  P.forEach(p => {
+    const m = L.marker([p.lat, p.lng], {draggable: true, opacity: p.approved ? 1 : .55}).addTo(map).bindTooltip(p.name);
+    m.on('dragend', async () => {
+      const l = m.getLatLng();
+      const {error} = await sb.from('places').update({lat: l.lat, lng: l.lng}).eq('id', p.id);
+      if (error) alert(error.message);
+    });
+    M[p.id] = m;
+  });
+  $('list').innerHTML = P.map(p => '<div class="r"><span data-f="' + p.id + '" style="cursor:pointer">' + esc(p.name) +
+    ' <small>' + esc(p.cat) + (p.approved ? '' : ' · pendente') + '</small></span><span>' +
+    (p.approved ? '' : '<button data-a="ok" data-id="' + p.id + '">Aprovar</button>') +
+    '<button data-a="ren" data-id="' + p.id + '">Renomear</button><button data-a="del" data-id="' + p.id + '">Excluir</button></span></div>').join('');
+}
+$('list').onclick = async e => {
+  const d = e.target.dataset, p = P.find(x => x.id === (d.id || d.f)); if (!p) return;
+  if (d.f) { map.setView(M[p.id].getLatLng(), 19); return; }
+  let res;
+  if (d.a === 'ok') res = await sb.from('places').update({approved: true}).eq('id', p.id);
+  if (d.a === 'ren') { const n = prompt('Novo nome:', p.name); if (!n) return; res = await sb.from('places').update({name: n.slice(0, 80)}).eq('id', p.id); }
+  if (d.a === 'del') { if (!confirm('Excluir "' + p.name + '"?')) return; res = await sb.from('places').delete().eq('id', p.id); }
+  if (res && res.error) alert(res.error.message);
+  load();
+};
+$('imp').onclick = () => $('file').click();
+$('file').onchange = async e => {
+  try {
+    const {rows, skipped} = UM.buildImportRows(JSON.parse(await e.target.files[0].text()));
+    let msg = '';
+    if (rows.length) {
+      const {error} = await sb.from('places').insert(rows);
+      msg = error ? error.message : rows.length + ' locais importados.';
+    } else msg = 'Nenhum local válido no arquivo.';
+    if (skipped.length) msg += '\nIgnorados: ' + skipped.map(s => '#' + (s.index + 1) + ' (' + s.reason + ')').join(', ');
+    alert(msg);
+    load();
+  } catch (x) { alert('JSON inválido.'); }
+  e.target.value = '';
+};
+init();
+</script></body></html>

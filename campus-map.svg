@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 650">
+<rect width="1000" height="650" fill="#f8fafc"/>
+<g fill="#e4eaf1" stroke="#aab8c9" stroke-width="5" stroke-linejoin="round">
+ <path d="M90 105 H410 V235 H90 Z"/><path d="M440 105 H910 V235 H440 Z"/>
+ <path d="M90 270 H285 V545 H90 Z"/><path d="M315 270 H650 V545 H315 Z"/><path d="M680 270 H910 V545 H680 Z"/>
+</g>
+<g fill="#d6e0ec" stroke="#aab8c9" stroke-width="3">
+ <path d="M115 130 H385 V210 H115 Z"/><path d="M465 130 H885 V210 H465 Z"/>
+ <path d="M115 295 H260 V520 H115 Z"/><path d="M340 295 H625 V520 H340 Z"/><path d="M705 295 H885 V520 H705 Z"/>
+</g>
+<g stroke="#fff" stroke-width="9"><path d="M410 170 H440 M285 390 H315 M650 390 H680 M500 235 V270"/></g>
+<g fill="#62748b" font-family="Arial,sans-serif" text-anchor="middle">
+ <text x="250" y="174" font-size="22" font-weight="bold">BLOCO A</text><text x="675" y="174" font-size="22" font-weight="bold">BLOCO B</text>
+ <text x="188" y="415" font-size="19" font-weight="bold">BLOCO C</text><text x="482" y="415" font-size="19" font-weight="bold">ÁREA ACADÊMICA</text><text x="795" y="415" font-size="19" font-weight="bold">BLOCO D</text>
+ <text x="500" y="600" font-size="14" fill="#98a6b8">PLANTA ESQUEMÁTICA DE EXEMPLO — SUBSTITUIR PELA PLANTA OFICIAL</text>
+</g>
+</svg>
