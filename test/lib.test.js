@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+globalThis.crypto ||= require('node:crypto').webcrypto;
 const UM = require('../lib.js');
+const edgeSubmission = import('../supabase/functions/_shared/submission.mjs');
 
 test('validateImageFile aceita JPG, PNG e WebP até 5 MB', () => {
   assert.deepEqual(UM.validateImageFile({type: 'image/jpeg', size: UM.MAX_IMAGE_SIZE}), {ok: true, extension: 'jpg'});
@@ -130,4 +132,68 @@ test('policies da migração restringem upload, leitura e exclusão no bucket', 
   assert.match(sql, /unimap_place_images_delete_guard[\s\S]*?bucket_id\s*<>\s*'place-images'\s+or\s+public\.is_dev\(\)/i);
   assert.match(sql, /unimap_place_images_admin_delete[\s\S]*?for\s+delete\s+to\s+authenticated[\s\S]*?public\.is_dev\(\)/i);
   assert.doesNotMatch(sql, /create\s+policy\s+\w+\s+on\s+storage\.objects\s+for\s+delete\s+to\s+anon/i);
+});
+
+test('autorização de limpeza requer token HMAC íntegro, caminho correspondente e janela vigente', async () => {
+  const {createCleanupToken, verifyCleanupToken, MAX_CLEANUP_AGE_MS} = await edgeSubmission;
+  const secret = 'unit-test-cleanup-secret-32-bytes-minimum';
+  const path = '123e4567-e89b-12d3-a456-426614174000.jpg';
+  const now = 1_800_000_000_000;
+  const token = await createCleanupToken(path, secret, now);
+  assert.equal(await verifyCleanupToken(null, path, secret, now), false);
+  assert.equal(await verifyCleanupToken(token, path, secret, now), true);
+  assert.equal(await verifyCleanupToken(token, '123e4567-e89b-12d3-a456-426614174001.jpg', secret, now), false);
+  assert.equal(await verifyCleanupToken(token, path, secret, now + MAX_CLEANUP_AGE_MS + 1), false);
+  assert.equal(await verifyCleanupToken(token + 'x', path, secret, now), false);
+  assert.equal(await verifyCleanupToken(token, path, 'incorrect-secret-with-more-than-32-bytes', now), false);
+});
+
+test('leitura limitada aceita corpo sem Content-Length se couber no limite', async () => {
+  const {readRequestBodyLimited} = await edgeSubmission;
+  const request = new Request('https://example.test/submit', {
+    method: 'POST',
+    duplex: 'half',
+    body: new ReadableStream({start(controller) { controller.enqueue(new TextEncoder().encode('abc')); controller.close(); }})
+  });
+  assert.equal(request.headers.has('content-length'), false);
+  const result = await readRequestBodyLimited(request, 4);
+  assert.equal(result.ok, true);
+  assert.equal(new TextDecoder().decode(result.bytes), 'abc');
+});
+
+test('leitura limitada cancela corpo sem Content-Length ao exceder o limite', async () => {
+  const {readRequestBodyLimited} = await edgeSubmission;
+  let cancelled = false;
+  const request = new Request('https://example.test/submit', {
+    method: 'POST',
+    duplex: 'half',
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(3));
+        controller.enqueue(new Uint8Array(3));
+        controller.enqueue(new Uint8Array(3));
+      },
+      cancel() { cancelled = true; }
+    })
+  });
+  assert.equal(request.headers.has('content-length'), false);
+  const result = await readRequestBodyLimited(request, 4);
+  assert.deepEqual(result, {ok: false, reason: 'too_large'});
+  assert.equal(cancelled, true);
+});
+
+test('Content-Length excessivo é recusado sem ler o corpo', async () => {
+  const {readRequestBodyLimited} = await edgeSubmission;
+  const request = new Request('https://example.test/submit', {
+    method: 'POST',
+    headers: {'Content-Length': '5'},
+    duplex: 'half',
+    body: new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array([1])); },
+      cancel() {}
+    })
+  });
+  const result = await readRequestBodyLimited(request, 4);
+  assert.deepEqual(result, {ok: false, reason: 'too_large'});
+  assert.equal(request.bodyUsed, false);
 });

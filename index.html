@@ -170,10 +170,10 @@
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) {
-          if (result.cleanupPending && result.imagePath) {
+          if (result.cleanupPending && result.imagePath && result.cleanupToken) {
             const cleanupResponse = await fetch(CFG.URL + '/functions/v1/cleanup-orphaned-place-image', {
-              method: 'POST', headers: {apikey: CFG.KEY, Authorization: 'Bearer ' + CFG.KEY, 'Content-Type': 'application/json'},
-              body: JSON.stringify({path: result.imagePath})
+              method: 'POST', headers: {apikey: CFG.KEY, 'Content-Type': 'application/json'},
+              body: JSON.stringify({path: result.imagePath, cleanupToken: result.cleanupToken})
             }).catch(() => null);
             if (!cleanupResponse || !cleanupResponse.ok) {
               $('formError').textContent = 'A sugestão falhou e a limpeza da foto não foi confirmada. Avise a equipe UniMap para verificar o Storage.';

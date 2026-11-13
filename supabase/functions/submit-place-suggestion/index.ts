@@ -1,8 +1,10 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import '../../../lib.js';
+import {
+  createCleanupToken, MAX_IMAGE_SIZE, MAX_REQUEST_BODY_SIZE, readRequestBodyLimited,
+  runPlaceSubmission, sniffImageMime, validCoords
+} from '../_shared/submission.mjs';
 
 const BUCKET = 'place-images';
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const MIME_EXTENSION: Record<string, string> = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp'
 };
@@ -14,7 +16,6 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Vary': 'Origin'
 };
-const UM = (globalThis as unknown as {UM: any}).UM;
 
 function jsonResponse(body: unknown, status: number, origin: string) {
   return new Response(JSON.stringify(body), {
@@ -36,8 +37,6 @@ Deno.serve(async request => {
     return new Response('ok', {headers: {...corsHeaders, 'Access-Control-Allow-Origin': origin}});
   }
   if (request.method !== 'POST') return jsonResponse({error: 'Method not allowed'}, 405, origin);
-  const contentLength = Number(request.headers.get('content-length') || 0);
-  if (contentLength > MAX_IMAGE_SIZE + 128 * 1024) return jsonResponse({error: 'Request is too large'}, 413, origin);
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -57,8 +56,21 @@ Deno.serve(async request => {
   if (limitError) return jsonResponse({error: 'Could not check the submission limit'}, 500, origin);
   if (!withinLimit) return jsonResponse({error: 'Limite de 20 sugestões por hora atingido para esta rede.'}, 429, origin);
 
+  const boundedBody = await readRequestBodyLimited(request, MAX_REQUEST_BODY_SIZE);
+  if (!boundedBody.ok) {
+    const status = boundedBody.reason === 'too_large' ? 413 : 400;
+    return jsonResponse({error: status === 413 ? 'Request is too large' : 'Invalid Content-Length'}, status, origin);
+  }
+
   let form: FormData;
-  try { form = await request.formData(); }
+  try {
+    const formHeaders = new Headers(request.headers);
+    formHeaders.delete('content-length');
+    const boundedRequest = new Request(request.url, {
+      method: 'POST', headers: formHeaders, body: boundedBody.bytes
+    });
+    form = await boundedRequest.formData();
+  }
   catch { return jsonResponse({error: 'Invalid form data'}, 400, origin); }
   const rawName = form.get('name');
   const rawDescription = form.get('description');
@@ -74,7 +86,7 @@ Deno.serve(async request => {
   const description = typeof rawDescription === 'string' ? rawDescription.trim() : '';
   const lat = Number(rawLat);
   const lng = Number(rawLng);
-  if (!name || name.length > 80 || description.length > 500 || !rawLat.trim() || !rawLng.trim() || !UM.validCoords(lat, lng)) {
+  if (!name || name.length > 80 || description.length > 500 || !rawLat.trim() || !rawLng.trim() || !validCoords(lat, lng)) {
     return jsonResponse({error: 'Nome, descrição ou coordenadas inválidas.'}, 400, origin);
   }
 
@@ -90,14 +102,14 @@ Deno.serve(async request => {
   let bytes: Uint8Array | null = null;
   if (file) {
     bytes = new Uint8Array(await file.arrayBuffer());
-    if (UM.sniffImageMime(bytes) !== file.type) {
+    if (sniffImageMime(bytes) !== file.type) {
       return jsonResponse({error: 'O conteúdo da foto não corresponde ao formato declarado.'}, 400, origin);
     }
   }
 
   const imagePath = file ? `${crypto.randomUUID()}.${MIME_EXTENSION[file.type]}` : null;
   const generatedPlaceId = crypto.randomUUID();
-  const result = await UM.runPlaceSubmission(
+  const result = await runPlaceSubmission(
     async () => {
       if (!file || !bytes || !imagePath) return {path: null};
       try {
@@ -142,10 +154,19 @@ Deno.serve(async request => {
   if (!result.ok) {
     console.error('Could not save place suggestion:', result.error, result.rollbackError, result.cleanupError);
     const cleanupPending = Boolean(imagePath && (result.rollbackError || result.cleanupError));
+    let cleanupToken: string | undefined;
+    if (cleanupPending) {
+      const tokenSecret = Deno.env.get('CLEANUP_TOKEN_SECRET');
+      if (tokenSecret) {
+        try { cleanupToken = await createCleanupToken(imagePath!, tokenSecret); }
+        catch (error) { console.error('Could not sign cleanup capability:', error); }
+      }
+    }
     return jsonResponse({
       error: 'Não foi possível salvar a sugestão.',
-      cleanupPending,
-      imagePath: cleanupPending ? imagePath : undefined
+      cleanupPending: cleanupPending && Boolean(cleanupToken),
+      imagePath: cleanupToken ? imagePath : undefined,
+      cleanupToken
     }, 500, origin);
   }
   return jsonResponse({place_id: result.placeId, approved: false}, 201, origin);
