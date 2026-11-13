@@ -11,8 +11,8 @@ html,body{height:100%;margin:0;font:15px system-ui,sans-serif}
 @media(max-width:800px){#ad{grid-template-columns:1fr;grid-template-rows:45% 55%}}
 #side{overflow:auto;padding:10px;border-right:1px solid #ddd}
 #map{height:100%}
-.r{display:flex;justify-content:space-between;gap:6px;padding:6px 0;border-bottom:1px solid #eee}
-.r small{color:#888}.r button{margin-left:3px}
+.r{padding:10px 0;border-bottom:1px solid #ddd;display:grid;grid-template-columns:minmax(0,1fr);gap:7px}
+.r small{color:#667085}.r button{margin:3px 3px 0 0}.r-main{display:flex;align-items:flex-start;gap:9px}.r-copy{min-width:0;flex:1}.r-copy b{display:block}.r-copy p{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0;color:#49566a;font-size:13px}.r-photo,.r-photo-empty{width:86px;height:68px;object-fit:cover;border-radius:6px;flex:none}.r-photo-empty{display:grid;place-items:center;background:#eef2f7;color:#667085;font-size:11px}.r-status{font-weight:600}.r-status.pending{color:#9a6700}.r-status.rejected{color:#b42318}.r-status.approved{color:#18794e}
 button{font:inherit;cursor:pointer}
 .big{padding:12px 18px;border:0;border-radius:8px;background:#0a4da2;color:#fff}
 
@@ -39,7 +39,7 @@ button{font:inherit;cursor:pointer}
   <div id="side">
     <b>Locais</b> <button id="out2">Sair</button> <button id="imp">Importar JSON</button>
     <input type="file" id="file" accept=".json" hidden>
-    <p><small>Arraste os pinos para ajustar. Clique duas vezes no mapa para adicionar.</small></p>
+  <p><small>Arraste os pinos para ajustar. Clique duas vezes no mapa para adicionar. Revise foto, descrição e coordenadas antes de aprovar ou rejeitar.</small></p>
     <div id="list"></div>
   </div>
   <div id="map"></div>
@@ -82,7 +82,7 @@ async function init() {
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '© OpenStreetMap'}).addTo(map);
   map.on('dblclick', async e => {
     const name = (prompt('Nome do novo local:') || '').trim().slice(0, 80); if (!name) return;
-    const {error} = await sb.from('places').insert({name, cat: 'Bloco', lat: e.latlng.lat, lng: e.latlng.lng, autor: 'dev', approved: true});
+    const {error} = await sb.from('places').insert({name, cat: 'Bloco', lat: e.latlng.lat, lng: e.latlng.lng, autor: 'dev', approved: true, rejected: false});
     if (error) alert(error.message); load();
   });
   load();
@@ -90,10 +90,11 @@ async function init() {
 async function load() {
   const {data, error} = await sb.from('places').select('*').order('created_at');
   if (error) return alert(error.message);
-  P = UM.sortPendingFirst(data);
+  P = UM.sortPendingFirst(data || []);
   Object.values(M).forEach(m => m.remove()); M = {};
   P.forEach(p => {
-    const m = L.marker([p.lat, p.lng], {draggable: true, opacity: p.approved ? 1 : .55}).addTo(map).bindTooltip(p.name);
+    const status = p.approved ? 'aprovado' : (p.rejected ? 'rejeitado' : 'pendente');
+    const m = L.marker([p.lat, p.lng], {draggable: true, opacity: p.approved ? 1 : .55}).addTo(map).bindTooltip(p.name + ' · ' + status);
     m.on('dragend', async () => {
       const l = m.getLatLng();
       const {error} = await sb.from('places').update({lat: l.lat, lng: l.lng}).eq('id', p.id);
@@ -101,16 +102,43 @@ async function load() {
     });
     M[p.id] = m;
   });
-  $('list').innerHTML = P.map(p => '<div class="r"><span data-f="' + p.id + '" style="cursor:pointer">' + esc(p.name) +
-    ' <small>' + esc(p.cat) + (p.approved ? '' : ' · pendente') + '</small></span><span>' +
-    (p.approved ? '' : '<button data-a="ok" data-id="' + p.id + '">Aprovar</button>') +
-    '<button data-a="ren" data-id="' + p.id + '">Renomear</button><button data-a="del" data-id="' + p.id + '">Excluir</button></span></div>').join('');
+  const cards = await Promise.all(P.map(async p => {
+    let image = '<span class="r-photo-empty">Sem foto</span>';
+    if (p.image_path) {
+      const {data: signed, error: imageError} = await sb.storage.from('place-images').createSignedUrl(p.image_path, 3600);
+      if (!imageError) image = '<img class="r-photo" src="' + esc(signed.signedUrl) + '" alt="Foto de referência de ' + esc(p.name) + '">';
+      else image = '<span class="r-photo-empty">Foto indisponível</span>';
+    }
+    const state = p.approved ? 'approved' : (p.rejected ? 'rejected' : 'pending');
+    const label = p.approved ? 'Aprovado' : (p.rejected ? 'Rejeitado' : 'Pendente');
+    const reviewActions = !p.approved && !p.rejected
+      ? '<button data-a="ok" data-id="' + p.id + '">Aprovar</button><button data-a="reject" data-id="' + p.id + '">Rejeitar</button>'
+      : (p.rejected ? '<button data-a="reopen" data-id="' + p.id + '">Reabrir análise</button>' : '');
+    const description = p.description ? '<p>' + esc(p.description) + '</p>' : '<p><small>Sem descrição.</small></p>';
+    const location = Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng))
+      ? Number(p.lat).toFixed(6) + ', ' + Number(p.lng).toFixed(6) : 'Coordenadas indisponíveis';
+    return '<div class="r"><div class="r-main">' + image + '<div class="r-copy"><b>' + esc(p.name) +
+      ' <small>' + esc(p.cat) + '</small></b>' + description + '<small>Localização: ' + esc(location) +
+      ' · <span class="r-status ' + state + '">' + label + '</span></small></div></div><div>' +
+      '<button data-f="' + p.id + '">Ver no mapa</button>' + reviewActions +
+      '<button data-a="ren" data-id="' + p.id + '">Renomear</button><button data-a="del" data-id="' + p.id + '">Excluir</button></div></div>';
+  }));
+  $('list').innerHTML = cards.join('');
+  $('list').querySelectorAll('img.r-photo').forEach(img => img.addEventListener('error', () => {
+    const fallback = document.createElement('span');
+    fallback.className = 'r-photo-empty';
+    fallback.textContent = 'Foto indisponível';
+    img.replaceWith(fallback);
+  }));
 }
 $('list').onclick = async e => {
-  const d = e.target.dataset, p = P.find(x => x.id === (d.id || d.f)); if (!p) return;
+  const button = e.target.closest('button'); if (!button) return;
+  const d = button.dataset, p = P.find(x => x.id === (d.id || d.f)); if (!p) return;
   if (d.f) { map.setView(M[p.id].getLatLng(), 19); return; }
   let res;
-  if (d.a === 'ok') res = await sb.from('places').update({approved: true}).eq('id', p.id);
+  if (d.a === 'ok') res = await sb.from('places').update({approved: true, rejected: false}).eq('id', p.id);
+  if (d.a === 'reject') res = await sb.from('places').update({approved: false, rejected: true}).eq('id', p.id);
+  if (d.a === 'reopen') res = await sb.from('places').update({approved: false, rejected: false}).eq('id', p.id);
   if (d.a === 'ren') { const n = prompt('Novo nome:', p.name); if (!n) return; res = await sb.from('places').update({name: n.slice(0, 80)}).eq('id', p.id); }
   if (d.a === 'del') { if (!confirm('Excluir "' + p.name + '"?')) return; res = await sb.from('places').delete().eq('id', p.id); }
   if (res && res.error) alert(res.error.message);

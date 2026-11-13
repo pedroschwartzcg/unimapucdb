@@ -1,38 +1,29 @@
-UNIMAP — PROJETO FRONT-END
+UNIMAP UCDB — GUIA DOS ALUNOS
 
-ESTRUTURA
-- index.html: estrutura da interface.
-- style.css: estilos e responsividade.
-- script.js: dados dos locais e funcionalidades.
-- campus-map.svg: planta esquemática de demonstração.
+O UniMap ajuda você a encontrar locais no campus e enviar sugestões para melhorar o mapa.
 
-IMPORTANTE
-Este protótipo foi pensado para os estudantes apenas CONSULTAREM o mapa.
-Não há upload de planta nem cadastro de locais pela interface pública.
+CONSULTAR O MAPA
+1. Abra o mapa no celular ou computador.
+2. Pesquise pelo nome do local. Toque em um resultado ou marcador para ver os detalhes.
+3. Use “Como chegar” para abrir as rotas a pé no Google Maps.
 
-CONFIGURAÇÃO PELA EQUIPE DE DESENVOLVIMENTO
-1. Substitua campus-map.svg pela planta oficial, mantendo o nome ou alterando o caminho em script.js.
-2. Em script.js, edite campusConfig.campusName.
-3. Configure campusConfig.floors com os pavimentos reais e o arquivo de planta correspondente.
-4. Cadastre os locais em campusConfig.locations.
-5. Para cada local, defina:
-   id: identificador único;
-   name: nome exibido;
-   code: código curto do marcador (ex.: B204);
-   category: categoria;
-   floor: id do pavimento;
-   x e y: posição percentual na planta (0 a 100);
-   icon: símbolo;
-   description: descrição curta.
+SUGERIR UM LOCAL
+1. Toque em “Sugerir local”.
+2. Toque no ponto correspondente no mapa.
+3. Informe o nome. A descrição é opcional.
+4. Se quiser, tire uma foto com a câmera do celular ou escolha uma imagem da galeria.
+5. Envie para aprovação.
 
-COORDENADAS
-x=0 é a borda esquerda; x=100 é a borda direita.
-y=0 é a borda superior; y=100 é a borda inferior.
-Ajuste os percentuais visualmente para cada planta.
+Fotos aceitas: JPG, PNG ou WebP, até 5 MB. Não inclua documentos, dados pessoais ou imagens de pessoas sem autorização. Confira o ponto do mapa antes do envio.
 
-EXECUÇÃO
-Abra index.html em um navegador. Para desenvolvimento, recomenda-se usar a extensão Live Server do VS Code.
-Os locais de exemplo e a planta esquemática são fictícios; substitua-os pelos dados oficiais da universidade.
+APROVAÇÃO
+O nome, a descrição, a localização e a foto são enviados para revisão da equipe UniMap. A sugestão e sua foto ficam ocultas do mapa público até a aprovação. Se aprovada, a referência visual aparece no marcador do local.
 
-LIMITAÇÃO ATUAL
-A interface permite pesquisar e localizar espaços por pavimento. O botão "Como chegar" marca o destino, mas não calcula rotas reais por corredores. Para isso, será necessário cadastrar a rede de circulação (corredores, portas, escadas, elevadores e conexões entre andares) e implementar um algoritmo de caminho, como A*.
+LOCALIZAÇÃO NO CELULAR
+Toque em “Minha localização” e permita o acesso à localização no navegador. O mapa centraliza sua posição e mostra uma área aproximada de precisão. Toque em “Parar localização” quando terminar. Se a posição não aparecer, confira a permissão do navegador, o GPS e a conexão; o site precisa estar aberto em HTTPS.
+
+PRIVACIDADE
+Use a localização somente enquanto precisar. A localização do seu aparelho não é enviada como parte da sugestão: o ponto enviado é aquele que você marcou no mapa. As fotos só ficam acessíveis no fluxo de revisão e após aprovação.
+
+DÚVIDAS OU CORREÇÕES
+Entre em contato com a equipe responsável pelo UniMap UCDB.

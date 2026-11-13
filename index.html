@@ -1,106 +1,214 @@
 <!DOCTYPE html>
-<html lang="pt-BR"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>UniMap UCDB</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<style>
-html,body,#map{height:100%;margin:0;font:15px system-ui,sans-serif}
-#top{
-  position:absolute;
-  z-index:1000;
-  top:10px;
-  left:60px;
-  right:10px;
-  max-width:400px;
-}
-#q{width:100%;box-sizing:border-box;padding:12px;border:0;border-radius:10px;box-shadow:0 2px 8px #0004;font:inherit}
-#res div{background:#fff;padding:9px 12px;border-top:1px solid #eee;cursor:pointer}
-#add{position:absolute;z-index:1000;left:10px;bottom:24px;padding:10px 14px;border:0;border-radius:8px;background:#0a4da2;color:#fff;font:inherit}
-</style></head>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a4da2">
+  <title>UniMap UCDB</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <style>
+    :root{font:15px system-ui,sans-serif;color:#17243a}html,body,#map{height:100%;width:100%;margin:0}button,input,textarea{font:inherit}button{touch-action:manipulation}
+    #top{position:absolute;z-index:1000;top:max(10px,env(safe-area-inset-top));left:60px;right:10px;max-width:440px}
+    #q{width:100%;box-sizing:border-box;padding:12px;border:0;border-radius:10px;box-shadow:0 2px 8px #0004;background:#fff;font:inherit}
+    #res{max-height:40vh;overflow:auto;border-radius:0 0 10px 10px}#res div{background:#fff;padding:10px 12px;border-top:1px solid #eee;cursor:pointer}
+    #add,#location{position:absolute;z-index:1000;bottom:max(20px,env(safe-area-inset-bottom));padding:11px 14px;border:0;border-radius:9px;box-shadow:0 2px 8px #0004;font-weight:650}
+    #add{left:10px;background:#0a4da2;color:#fff}#location{right:10px;background:#fff;color:#173862}#location:disabled{opacity:.7}
+    .leaflet-popup-content{min-width:170px}.place-photo{display:block;width:100%;max-height:170px;object-fit:cover;border-radius:7px;margin:0 0 8px}.place-description{margin:6px 0;color:#4d596b;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
+    .scrim{position:fixed;inset:0;z-index:2000;background:#101a2a88;display:none;align-items:flex-end;justify-content:center;padding:12px}.scrim.open{display:flex}
+    .dialog{background:#fff;width:min(100%,480px);max-height:min(92dvh,760px);overflow:auto;border-radius:16px;padding:20px;box-shadow:0 14px 50px #0004;padding-bottom:max(20px,env(safe-area-inset-bottom))}
+    .dialog h1{font-size:21px;margin:0 0 5px;color:#14213d}.dialog>p{color:#64748b;font-size:13px;line-height:1.45;margin:0 0 16px}
+    .field{display:block;margin:13px 0}.field span{display:block;font-size:13px;font-weight:650;margin-bottom:6px}.field input,.field textarea{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:11px;background:#fff;color:#17243a}.field textarea{min-height:88px;resize:vertical}.field small{display:block;color:#64748b;font-size:12px;margin-top:5px}
+    #preview{display:none;max-width:100%;max-height:180px;object-fit:contain;border-radius:8px;margin-top:8px}.form-error{min-height:1.3em;color:#b42318;font-size:13px}.actions{display:flex;gap:9px;justify-content:flex-end;margin-top:10px}.actions button{border:0;border-radius:8px;padding:10px 14px;font-weight:650}.secondary{background:#eef2f7;color:#26364e}.primary{background:#0a4da2;color:#fff}.primary:disabled{opacity:.6}
+    @media(max-width:600px){#top{left:58px;right:8px;top:max(8px,env(safe-area-inset-top))}#q{padding:11px}#add,#location{bottom:max(14px,env(safe-area-inset-bottom));padding:10px 11px;font-size:14px}.dialog{border-radius:16px 16px 10px 10px}.leaflet-popup-content{min-width:150px}}
+  </style>
+</head>
 <body>
-<div id="map"></div>
-<div id="top"><input id="q" placeholder="Pesquisar no campus…" autocomplete="off"><div id="res"></div></div>
-<button id="add">＋ Adicionar local</button>
-<button id="location" onclick="localizarAluno()">
-  📍 Minha localização
-</button>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="config.js"></script>
-<script src="lib.js"></script>
-<script>
-const sb = supabase.createClient(CFG.URL, CFG.KEY), $ = id => document.getElementById(id), {esc} = UM;
-const map = L.map('map').setView([-20.4065, -54.6169], 17);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '© OpenStreetMap'}).addTo(map);
-let P = [], M = {}, adding = false;
-let userMarker = null;
-let userCircle = null;
+  <div id="map" aria-label="Mapa do campus UCDB"></div>
+  <div id="top"><label class="sr-only" for="q">Pesquisar no campus</label><input id="q" placeholder="Pesquisar no campus…" autocomplete="off" aria-label="Pesquisar no campus"><div id="res" role="listbox"></div></div>
+  <button id="add" type="button">＋ Sugerir local</button>
+  <button id="location" type="button" aria-pressed="false">📍 Minha localização</button>
 
-function localizarAluno() {
-  if (!navigator.geolocation) {
-    alert('Seu navegador não suporta localização.');
-    return;
-  }
+  <div id="submission" class="scrim" role="presentation">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="formTitle">
+      <h1 id="formTitle">Sugerir um local</h1>
+      <p>Confira o ponto marcado no mapa e envie os dados para revisão da equipe. A sugestão e a foto só aparecerão após aprovação.</p>
+      <form id="placeForm">
+        <label class="field"><span>Nome do local *</span><input id="placeName" maxlength="80" required autocomplete="off" placeholder="Ex.: Entrada do bloco A"></label>
+        <label class="field"><span>Descrição (opcional)</span><textarea id="placeDescription" maxlength="500" placeholder="Informações que ajudem outros alunos a reconhecer o local"></textarea><small>Até 500 caracteres.</small></label>
+        <label class="field"><span>Foto de referência (opcional)</span><input id="placePhoto" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><small>JPG, PNG ou WebP; máximo de 5 MB. No celular, você pode tirar uma foto ou escolher uma imagem.</small><img id="preview" alt="Prévia da foto selecionada"></label>
+        <p id="formError" class="form-error" role="alert"></p>
+        <div class="actions"><button id="cancelForm" class="secondary" type="button">Cancelar</button><button id="submitPlace" class="primary" type="submit">Enviar para aprovação</button></div>
+      </form>
+    </section>
+  </div>
 
-  navigator.geolocation.watchPosition(
-    (position) => {
-      const lat = position.coords.latitude;
-      const lng = position.coords.longitude;
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="config.js"></script>
+  <script src="lib.js"></script>
+  <script>
+    const IMAGE_BUCKET = 'place-images';
+    const sb = supabase.createClient(CFG.URL, CFG.KEY);
+    const $ = id => document.getElementById(id);
+    const map = L.map('map').setView([-20.4065, -54.6169], 17);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '© OpenStreetMap'}).addTo(map);
 
-      if (!userMarker) {
-        userMarker = L.marker([lat, lng])
-          .addTo(map)
-          .bindPopup('Você está aqui!');
-      } else {
-        userMarker.setLatLng([lat, lng]);
-      }
+    let places = [];
+    const markers = new Map();
+    let adding = false;
+    let selectedCoords = null;
+    let photoPreviewUrl = null;
+    let userMarker = null;
+    let userCircle = null;
+    let locationWatchId = null;
+    let centeredOnUser = false;
 
-      if (!userCircle) {
-        userCircle = L.circle([lat, lng], {
-          radius: position.coords.accuracy,
-          color: '#1677ff'
-        }).addTo(map);
-      } else {
-        userCircle.setLatLng([lat, lng]);
-        userCircle.setRadius(position.coords.accuracy);
-      }
-    },
-    (error) => {
-      alert('Não foi possível acessar sua localização. Verifique a permissão do navegador.');
-    },
-    {
-      enableHighAccuracy: true
+    function openForm(coords) {
+      selectedCoords = coords;
+      $('formError').textContent = '';
+      $('placeName').value = '';
+      $('placeDescription').value = '';
+      $('placePhoto').value = '';
+      clearPreview();
+      $('submission').classList.add('open');
+      $('placeName').focus();
     }
-  );
-}
+    function closeForm() {
+      $('submission').classList.remove('open');
+      selectedCoords = null;
+      clearPreview();
+    }
+    function clearPreview() {
+      if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+      photoPreviewUrl = null;
+      $('preview').removeAttribute('src');
+      $('preview').style.display = 'none';
+    }
+    function popupContent(place, imageUrl) {
+      const photo = imageUrl ? '<img class="place-photo" src="' + UM.esc(imageUrl) + '" alt="Foto de referência de ' + UM.esc(place.name) + '" loading="lazy">' : '';
+      const description = place.description ? '<p class="place-description">' + UM.esc(place.description) + '</p>' : '';
+      return photo + '<b>' + UM.esc(place.name) + '</b><br>' + UM.esc(place.cat || 'Local') + description +
+        '<a target="_blank" rel="noopener" href="' + UM.esc(UM.directionsUrl(place.lat, place.lng)) + '">Como chegar</a>';
+    }
+    async function loadPlaces() {
+      const {data, error} = await sb.from('places').select('*');
+      if (error) { console.error('Falha ao carregar locais:', error); return; }
+      places = data || [];
+      for (const marker of markers.values()) marker.remove();
+      markers.clear();
+      for (const place of places) {
+        // A policy atual da tabela retorna ao público somente os registros aprovados.
+        let imageUrl = null;
+        if (place.image_path) {
+          const {data: signed, error: imageError} = await sb.storage.from(IMAGE_BUCKET).createSignedUrl(place.image_path, 3600);
+          if (!imageError) imageUrl = signed.signedUrl;
+          else console.warn('A foto aprovada não pôde ser carregada:', imageError.message);
+        }
+        const marker = L.marker([place.lat, place.lng]).addTo(map).bindPopup(popupContent(place, imageUrl));
+        markers.set(place.id, marker);
+      }
+    }
+    $('q').oninput = () => {
+      $('res').innerHTML = UM.filterPlaces(places, $('q').value).map(place =>
+        '<div role="option" tabindex="0" data-id="' + UM.esc(place.id) + '">' + UM.esc(place.name) + '</div>').join('');
+    };
+    $('res').onclick = event => {
+      const option = event.target.closest('[data-id]');
+      const marker = option && markers.get(option.dataset.id);
+      if (!marker) return;
+      map.setView(marker.getLatLng(), 19); marker.openPopup(); $('res').innerHTML = ''; $('q').value = '';
+    };
+    $('res').onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') event.target.click(); };
+    $('add').onclick = () => {
+      adding = !adding;
+      $('add').textContent = adding ? 'Toque no mapa… (cancelar)' : '＋ Sugerir local';
+    };
+    map.on('click', event => {
+      if (!adding) return;
+      adding = false;
+      $('add').textContent = '＋ Sugerir local';
+      openForm({lat: event.latlng.lat, lng: event.latlng.lng});
+    });
+    $('cancelForm').onclick = closeForm;
+    $('submission').onclick = event => { if (event.target === $('submission')) closeForm(); };
+    $('placePhoto').onchange = () => {
+      clearPreview();
+      const file = $('placePhoto').files[0];
+      if (!file) return;
+      const result = UM.validateImageFile(file);
+      if (!result.ok) { $('formError').textContent = result.message; $('placePhoto').value = ''; return; }
+      $('formError').textContent = '';
+      photoPreviewUrl = URL.createObjectURL(file);
+      $('preview').src = photoPreviewUrl;
+      $('preview').style.display = 'block';
+    };
+    $('placeForm').onsubmit = async event => {
+      event.preventDefault();
+      const file = $('placePhoto').files[0] || null;
+      const values = UM.validateSubmission($('placeName').value, $('placeDescription').value,
+        selectedCoords && selectedCoords.lat, selectedCoords && selectedCoords.lng, file);
+      if (!values.ok) { $('formError').textContent = values.message; return; }
+      const submit = $('submitPlace'); submit.disabled = true; submit.textContent = 'Enviando…'; $('formError').textContent = '';
+      let imagePath = null;
+      try {
+        if (file) {
+          imagePath = crypto.randomUUID() + '.' + values.imageExtension;
+          const {error: uploadError} = await sb.storage.from(IMAGE_BUCKET).upload(imagePath, file, {
+            contentType: file.type, cacheControl: '3600', upsert: false
+          });
+          if (uploadError) throw uploadError;
+        }
+        const {error} = await sb.from('places').insert({
+          name: values.name, description: values.description || null, image_path: imagePath,
+          cat: 'Sugestão', lat: selectedCoords.lat, lng: selectedCoords.lng, autor: 'aluno', approved: false, rejected: false
+        });
+        if (error) throw error;
+        closeForm();
+        alert('Sugestão enviada! O local e a foto ficarão ocultos até a aprovação do administrador.');
+      } catch (error) {
+        console.error('Falha no envio da sugestão:', error);
+        $('formError').textContent = 'Não foi possível enviar. Confira sua conexão e tente novamente.';
+      } finally {
+        submit.disabled = false; submit.textContent = 'Enviar para aprovação';
+      }
+    };
 
-async function load() {
-  const {data, error} = await sb.from('places').select('*');
-  if (error) { alert('Não foi possível carregar o mapa.'); return; }
-  P = data;
-  P.forEach(p => {
-    M[p.id] = L.marker([p.lat, p.lng]).addTo(map).bindPopup('<b>' + esc(p.name) + '</b><br>' + esc(p.cat) +
-      '<br><a target="_blank" rel="noopener" href="' + esc(UM.directionsUrl(p.lat, p.lng)) + '">Como chegar</a>');
-  });
-}
-$('q').oninput = () => {
-  $('res').innerHTML = UM.filterPlaces(P, $('q').value).map(p => '<div data-id="' + esc(p.id) + '">' + esc(p.name) + '</div>').join('');
-};
-$('res').onclick = e => {
-  const m = M[e.target.dataset.id]; if (!m) return;
-  map.setView(m.getLatLng(), 19); m.openPopup(); $('res').innerHTML = ''; $('q').value = '';
-};
-$('add').onclick = () => {
-  adding = !adding;
-  $('add').textContent = adding ? 'Toque no mapa…  (cancelar)' : '＋ Adicionar local';
-};
-map.on('click', async e => {
-  if (!adding) return;
-  adding = false; $('add').textContent = '＋ Adicionar local';
-  const name = (prompt('Nome do local:') || '').trim().slice(0, 80);
-  if (!name) return;
-  const {error} = await sb.from('places').insert({name, cat: 'Sugestão', lat: e.latlng.lat, lng: e.latlng.lng, autor: 'aluno', approved: false});
-  alert(error ? 'Não foi possível enviar.' : 'Obrigado! Sua sugestão será analisada antes de aparecer no mapa.');
-});
-load();
-</script></body></html>
+    function setLocationButton(active, text) {
+      $('location').setAttribute('aria-pressed', String(active));
+      $('location').textContent = text;
+    }
+    function stopLocationWatch() {
+      if (locationWatchId !== null) navigator.geolocation.clearWatch(locationWatchId);
+      locationWatchId = null;
+      setLocationButton(false, '📍 Minha localização');
+    }
+    function localizarAluno() {
+      if (!navigator.geolocation) { alert('Seu navegador não suporta localização.'); return; }
+      if (locationWatchId !== null) { stopLocationWatch(); return; }
+      centeredOnUser = false;
+      setLocationButton(true, 'Parar localização');
+      $('location').disabled = true;
+      locationWatchId = navigator.geolocation.watchPosition(position => {
+        const point = [position.coords.latitude, position.coords.longitude];
+        if (!userMarker) userMarker = L.marker(point).addTo(map).bindPopup('Você está aqui!');
+        else userMarker.setLatLng(point);
+        if (!userCircle) userCircle = L.circle(point, {radius: position.coords.accuracy, color: '#1677ff'}).addTo(map);
+        else { userCircle.setLatLng(point); userCircle.setRadius(position.coords.accuracy); }
+        if (!centeredOnUser) { map.setView(point, Math.max(map.getZoom(), 17)); centeredOnUser = true; }
+      }, error => {
+        stopLocationWatch();
+        const messages = {
+          1: 'Permissão de localização negada. Autorize o acesso à localização nas configurações do navegador.',
+          2: 'A posição não está disponível agora. Tente novamente em alguns instantes.',
+          3: 'A localização demorou demais. Tente novamente.'
+        };
+        alert(messages[error.code] || 'Não foi possível obter sua localização.');
+      }, {enableHighAccuracy: true, maximumAge: 10000, timeout: 20000});
+      $('location').disabled = false;
+    }
+    $('location').onclick = localizarAluno;
+    window.addEventListener('pagehide', stopLocationWatch);
+    loadPlaces();
+  </script>
+</body>
+</html>
