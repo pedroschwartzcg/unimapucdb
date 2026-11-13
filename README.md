@@ -11,18 +11,22 @@ Mapa do campus feito com Leaflet e OpenStreetMap, com dados no Supabase. O paine
 | `lib.js` | Busca, escape de HTML, importação e validação compartilhada. |
 | `config.js` | URL/chave publicável do Supabase e e-mail de administrador. |
 | `schema.sql` | Esquema inicial e policies existentes. Não reaplique sobre uma instalação em uso: o arquivo original remove e recria policies nomeadas. |
-| `supabase/migrations/20261113000000_add_submission_media.sql` | Migração aditiva para descrição, fotos privadas e estado de rejeição. Deve ser revisada e executada manualmente. |
+| `supabase/migrations/20261113000000_add_submission_media.sql` | Migração aditiva para tabela complementar, rate limit e policies do bucket. Não altera `places`; revise e execute manualmente. |
+| `supabase/functions/submit-place-suggestion/` | Valida, limita e grava sugestões usando segredos server-side; remove uploads quando a gravação falha. |
+| `supabase/functions/cleanup-orphaned-place-image/` | Retry seguro para remover somente fotos recentes sem referência. |
 | `test/lib.test.js` | Testes unitários das funções compartilhadas. |
 
 ## Configuração do Supabase
 
 1. Confira em `config.js` a URL do projeto, a chave publicável (anon) e o e-mail do administrador. A chave publicável pode estar no front-end; nunca coloque a `service_role` no site.
 2. Confirme que o administrador tem uma conta no Supabase Auth com senha. `admin.html` usa e-mail e senha; `CFG.DEV_EMAIL` e a função `public.is_dev()` devem corresponder ao e-mail dessa conta.
-3. Revise e execute manualmente a migração `supabase/migrations/20261113000000_add_submission_media.sql` no SQL Editor. Ela acrescenta colunas à tabela existente, cria o bucket privado `place-images` se não existir e adiciona policies de Storage com nomes novos. Ela não executa nenhuma operação de deploy.
-4. Se o bucket `place-images` já existia, a migração preserva sua configuração. Confira manualmente se ele está privado, aceita somente `image/jpeg`, `image/png` e `image/webp`, e limita uploads a 5 MiB. Ajuste-o no painel do Storage se necessário.
-5. Mantenha as policies de `public.places` existentes. A leitura pública deve continuar restrita aos registros aprovados; a policy de inserção de alunos precisa permitir `approved = false`, `autor = 'aluno'` e `cat = 'Sugestão'`, como no esquema deste projeto.
+3. Revise e execute manualmente a migração `supabase/migrations/20261113000000_add_submission_media.sql` no SQL Editor. Ela cria tabelas complementares para descrição/foto/rejeição e limite por IP, cria o bucket privado se não existir e acrescenta policies. **Não altera `public.places` nem remove policies existentes.**
+4. Se `place-images` já existia, a migração preserva sua configuração. Confirme que está privado, aceita apenas `image/jpeg`, `image/png` e `image/webp`, e limita uploads a 5 MiB. Confirme também que o administrador autenticado corresponde a `public.is_dev()`.
+5. Publique as duas Edge Functions após revisar o código: `supabase functions deploy submit-place-suggestion` e `supabase functions deploy cleanup-orphaned-place-image`. O `supabase/config.toml` desativa a validação JWT do gateway para esses endpoints públicos; a função de envio valida campos e assinatura binária, aplica até 20 sugestões por IP/hash por hora e usa `SUPABASE_SERVICE_ROLE_KEY` somente no servidor. Nunca coloque essa chave em `config.js`.
+6. Configure o segredo `RATE_LIMIT_SALT` com valor aleatório longo e mantenha `UNIMAP_ALLOWED_ORIGINS` alinhado ao domínio Netlify e, em desenvolvimento, `http://localhost:3000`. O runtime também precisa fornecer `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` às funções. A política restritiva de Storage bloqueia upload direto por clientes anônimos; o endpoint server-side faz os uploads.
+7. Mantenha as policies existentes de `public.places`. A leitura pública continua filtrada por `approved`; a policy existente de sugestão permanece intacta. As funções criam o registro pendente por meio da credencial server-side e também criam a linha correspondente em `place_submission_details`.
 
-O bucket é privado. O site só gera URLs temporárias para imagens aprovadas; o administrador autenticado pode revisar fotos pendentes. A validação de tamanho e formato também é configurada no bucket, além da validação no navegador.
+O bucket é privado. O público só recebe URLs temporárias de imagens ligadas a locais aprovados; o administrador autenticado pode revisar fotos pendentes. Tamanho e MIME são checados no navegador, na assinatura binária da Edge Function, nos metadados `storage.objects` e pelos limites do bucket. O limite atual é por IP e pode agrupar vários alunos que usem a mesma rede. Para exposição pública maior, acrescente Turnstile como barreira contra bots e reveja o limite para redes compartilhadas.
 
 ## Acesso administrativo
 

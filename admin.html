@@ -88,9 +88,14 @@ async function init() {
   load();
 }
 async function load() {
-  const {data, error} = await sb.from('places').select('*').order('created_at');
-  if (error) return alert(error.message);
-  P = UM.sortPendingFirst(data || []);
+  const [placesResult, detailsResult] = await Promise.all([
+    sb.from('places').select('*').order('created_at'),
+    sb.from('place_submission_details').select('place_id, description, image_path, rejected')
+  ]);
+  if (placesResult.error) return alert(placesResult.error.message);
+  if (detailsResult.error) return alert(detailsResult.error.message);
+  const detailsByPlace = new Map((detailsResult.data || []).map(item => [item.place_id, item]));
+  P = UM.sortPendingFirst((placesResult.data || []).map(place => ({...place, ...(detailsByPlace.get(place.id) || {})})));
   Object.values(M).forEach(m => m.remove()); M = {};
   P.forEach(p => {
     const status = p.approved ? 'aprovado' : (p.rejected ? 'rejeitado' : 'pendente');
@@ -136,11 +141,36 @@ $('list').onclick = async e => {
   const d = button.dataset, p = P.find(x => x.id === (d.id || d.f)); if (!p) return;
   if (d.f) { map.setView(M[p.id].getLatLng(), 19); return; }
   let res;
-  if (d.a === 'ok') res = await sb.from('places').update({approved: true, rejected: false}).eq('id', p.id);
-  if (d.a === 'reject') res = await sb.from('places').update({approved: false, rejected: true}).eq('id', p.id);
-  if (d.a === 'reopen') res = await sb.from('places').update({approved: false, rejected: false}).eq('id', p.id);
+  const saveReviewState = async rejected => p.place_id
+    ? sb.from('place_submission_details').update({rejected}).eq('place_id', p.id)
+    : sb.from('place_submission_details').insert({place_id: p.id, description: p.description || null, image_path: p.image_path || null, rejected});
+  if (d.a === 'ok') {
+    res = await sb.from('places').update({approved: true}).eq('id', p.id);
+    if (!res.error) res = await saveReviewState(false);
+  }
+  if (d.a === 'reject') {
+    res = await sb.from('places').update({approved: false}).eq('id', p.id);
+    if (!res.error) res = await saveReviewState(true);
+  }
+  if (d.a === 'reopen') {
+    res = await sb.from('places').update({approved: false}).eq('id', p.id);
+    if (!res.error) res = await saveReviewState(false);
+  }
   if (d.a === 'ren') { const n = prompt('Novo nome:', p.name); if (!n) return; res = await sb.from('places').update({name: n.slice(0, 80)}).eq('id', p.id); }
-  if (d.a === 'del') { if (!confirm('Excluir "' + p.name + '"?')) return; res = await sb.from('places').delete().eq('id', p.id); }
+  if (d.a === 'del') {
+    if (!confirm('Excluir "' + p.name + '"?')) return;
+    const outcome = await UM.deletePlaceWithImageCleanup(
+      () => sb.from('places').delete().eq('id', p.id),
+      path => sb.storage.from('place-images').remove([path]),
+      p.image_path
+    );
+    if (!outcome.placeDeleted) { alert('Não foi possível excluir o local: ' + outcome.error.message); return; }
+    if (outcome.imageDeleted === false) {
+      alert('O local foi excluído, mas a foto não pôde ser removida do Storage. Informe ao administrador para revisar o arquivo: ' + p.image_path);
+    }
+    await load();
+    return;
+  }
   if (res && res.error) alert(res.error.message);
   load();
 };

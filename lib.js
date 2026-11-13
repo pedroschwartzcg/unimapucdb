@@ -49,6 +49,16 @@
     return {ok: true, extension};
   }
 
+  function sniffImageMime(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg';
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    if (data.length >= png.length && png.every((byte, index) => data[index] === byte)) return 'image/png';
+    if (data.length >= 12 && String.fromCharCode(...data.subarray(0, 4)) === 'RIFF' &&
+        String.fromCharCode(...data.subarray(8, 12)) === 'WEBP') return 'image/webp';
+    return null;
+  }
+
   function validateSubmission(name, description, lat, lng, file) {
     const cleanName = String(name == null ? '' : name).trim().slice(0, 80);
     const cleanDescription = String(description == null ? '' : description).trim().slice(0, 500);
@@ -57,6 +67,58 @@
     const image = validateImageFile(file);
     if (!image.ok) return image;
     return {ok: true, name: cleanName, description: cleanDescription, imageExtension: image.extension};
+  }
+
+  // Removes the photo only after the administrator's requested row deletion succeeds.
+  async function deletePlaceWithImageCleanup(deletePlace, deleteImage, imagePath) {
+    let rowResult;
+    try { rowResult = await deletePlace(); }
+    catch (error) { return {placeDeleted: false, imageDeleted: false, error}; }
+    if (rowResult && rowResult.error) return {placeDeleted: false, imageDeleted: false, error: rowResult.error};
+    if (!imagePath) return {placeDeleted: true, imageDeleted: null, error: null};
+    try {
+      const imageResult = await deleteImage(imagePath);
+      const error = imageResult && imageResult.error ? imageResult.error : null;
+      return {placeDeleted: true, imageDeleted: !error, error};
+    } catch (error) {
+      return {placeDeleted: true, imageDeleted: false, error};
+    }
+  }
+
+  // Shared compensation flow used by the trusted submission endpoint.
+  async function runPlaceSubmission(uploadImage, insertPlace, insertDetails, rollbackPlace, removeImage) {
+    let imagePath = null;
+    let placeId = null;
+    try {
+      const uploaded = await uploadImage();
+      imagePath = uploaded && uploaded.path ? uploaded.path : null;
+      if (uploaded && uploaded.error) throw uploaded.error;
+      const inserted = await insertPlace(imagePath);
+      placeId = inserted && inserted.data ? inserted.data.id : (inserted && inserted.id ? inserted.id : null);
+      if (inserted && inserted.error) throw inserted.error;
+      if (!placeId) throw new Error('Place insert returned no id');
+      const details = await insertDetails(placeId, imagePath);
+      if (details && details.error) throw details.error;
+      return {ok: true, placeId, imagePath, error: null, rollbackError: null, cleanupError: null};
+    } catch (error) {
+      let rollbackError = null;
+      if (placeId) {
+        try {
+          const rollback = await rollbackPlace(placeId);
+          rollbackError = rollback && rollback.error ? rollback.error : null;
+        } catch (failure) { rollbackError = failure; }
+      }
+      let cleanupError = null;
+      if (imagePath && !rollbackError) {
+        try {
+          const removed = await removeImage(imagePath);
+          cleanupError = removed && removed.error ? removed.error : null;
+        } catch (failure) { cleanupError = failure; }
+      } else if (imagePath && rollbackError) {
+        cleanupError = new Error('Image cleanup skipped because the new place could not be rolled back');
+      }
+      return {ok: false, placeId, imagePath, error, rollbackError, cleanupError};
+    }
   }
 
   // Converte o JSON importado em linhas para o banco. Itens inválidos são ignorados e listados em `skipped`.
@@ -79,7 +141,7 @@
   }
 
   const api = {esc, norm, filterPlaces, sortPendingFirst, isDevEmail, validCoords, directionsUrl, buildImportRows,
-    MAX_IMAGE_SIZE, validateImageFile, validateSubmission};
+    MAX_IMAGE_SIZE, validateImageFile, sniffImageMime, validateSubmission, deletePlaceWithImageCleanup, runPlaceSubmission};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.UM = api;
 })(typeof window !== 'undefined' ? window : globalThis);

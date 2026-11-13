@@ -91,20 +91,29 @@
         '<a target="_blank" rel="noopener" href="' + UM.esc(UM.directionsUrl(place.lat, place.lng)) + '">Como chegar</a>';
     }
     async function loadPlaces() {
-      const {data, error} = await sb.from('places').select('*');
-      if (error) { console.error('Falha ao carregar locais:', error); return; }
-      places = data || [];
+      const [placeResult, detailsResult] = await Promise.all([
+        sb.from('places').select('*'),
+        sb.from('place_submission_details').select('place_id, description, image_path, rejected')
+      ]);
+      if (placeResult.error) { console.error('Falha ao carregar locais:', placeResult.error); return; }
+      if (detailsResult.error) { console.error('Falha ao carregar detalhes públicos:', detailsResult.error); return; }
+      const detailsByPlace = new Map((detailsResult.data || []).map(item => [item.place_id, item]));
+      places = (placeResult.data || []).map(place => ({...place, ...(detailsByPlace.get(place.id) || {})}));
       for (const marker of markers.values()) marker.remove();
       markers.clear();
       for (const place of places) {
-        // A policy atual da tabela retorna ao público somente os registros aprovados.
-        let imageUrl = null;
+        // Generate a short-lived URL only when the approved place is opened.
+        const marker = L.marker([place.lat, place.lng]).addTo(map).bindPopup(popupContent(place, null));
+        let popupRequest = 0;
         if (place.image_path) {
-          const {data: signed, error: imageError} = await sb.storage.from(IMAGE_BUCKET).createSignedUrl(place.image_path, 3600);
-          if (!imageError) imageUrl = signed.signedUrl;
-          else console.warn('A foto aprovada não pôde ser carregada:', imageError.message);
+          marker.on('popupopen', async () => {
+            const requestId = ++popupRequest;
+            const {data: signed, error: imageError} = await sb.storage.from(IMAGE_BUCKET).createSignedUrl(place.image_path, 300);
+            if (imageError) { console.warn('A foto aprovada não pôde ser carregada:', imageError.message); return; }
+            if (requestId === popupRequest && marker.isPopupOpen()) marker.setPopupContent(popupContent(place, signed.signedUrl));
+          });
+          marker.on('popupclose', () => { popupRequest++; });
         }
-        const marker = L.marker([place.lat, place.lng]).addTo(map).bindPopup(popupContent(place, imageUrl));
         markers.set(place.id, marker);
       }
     }
@@ -149,20 +158,30 @@
         selectedCoords && selectedCoords.lat, selectedCoords && selectedCoords.lng, file);
       if (!values.ok) { $('formError').textContent = values.message; return; }
       const submit = $('submitPlace'); submit.disabled = true; submit.textContent = 'Enviando…'; $('formError').textContent = '';
-      let imagePath = null;
       try {
-        if (file) {
-          imagePath = crypto.randomUUID() + '.' + values.imageExtension;
-          const {error: uploadError} = await sb.storage.from(IMAGE_BUCKET).upload(imagePath, file, {
-            contentType: file.type, cacheControl: '3600', upsert: false
-          });
-          if (uploadError) throw uploadError;
-        }
-        const {error} = await sb.from('places').insert({
-          name: values.name, description: values.description || null, image_path: imagePath,
-          cat: 'Sugestão', lat: selectedCoords.lat, lng: selectedCoords.lng, autor: 'aluno', approved: false, rejected: false
+        const body = new FormData();
+        body.set('name', values.name);
+        body.set('description', values.description);
+        body.set('lat', String(selectedCoords.lat));
+        body.set('lng', String(selectedCoords.lng));
+        if (file) body.set('photo', file, file.name);
+        const response = await fetch(CFG.URL + '/functions/v1/submit-place-suggestion', {
+          method: 'POST', headers: {apikey: CFG.KEY, Authorization: 'Bearer ' + CFG.KEY}, body
         });
-        if (error) throw error;
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          if (result.cleanupPending && result.imagePath) {
+            const cleanupResponse = await fetch(CFG.URL + '/functions/v1/cleanup-orphaned-place-image', {
+              method: 'POST', headers: {apikey: CFG.KEY, Authorization: 'Bearer ' + CFG.KEY, 'Content-Type': 'application/json'},
+              body: JSON.stringify({path: result.imagePath})
+            }).catch(() => null);
+            if (!cleanupResponse || !cleanupResponse.ok) {
+              $('formError').textContent = 'A sugestão falhou e a limpeza da foto não foi confirmada. Avise a equipe UniMap para verificar o Storage.';
+              return;
+            }
+          }
+          throw new Error(result.error || 'Não foi possível enviar a sugestão.');
+        }
         closeForm();
         alert('Sugestão enviada! O local e a foto ficarão ocultos até a aprovação do administrador.');
       } catch (error) {
