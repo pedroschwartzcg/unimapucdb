@@ -1,62 +1,73 @@
 # UniMap UCDB — manual do administrador
 
-Mapa do campus feito com Leaflet e OpenStreetMap, com dados no Supabase. O painel administrativo preserva o fluxo existente de autenticação, edição e importação. Sugestões dos alunos ficam ocultas do público até serem aprovadas.
+Mapa do campus feito com Leaflet e OpenStreetMap, com dados no Supabase. O painel administrativo preserva o fluxo de autenticação, edição e importação. Sugestões e fotos ficam ocultas do público até a aprovação.
 
-## Arquivos principais
+## Configuração local
 
-| Arquivo | Função |
-|---|---|
-| `index.html` | Mapa público, busca, envio de sugestões, fotos e localização do aluno. |
-| `admin.html` | Painel de revisão, aprovação/rejeição, edição, ajuste dos pinos e importação JSON. |
-| `lib.js` | Busca, escape de HTML, importação e validação compartilhada. |
-| `config.js` | URL/chave publicável do Supabase e e-mail de administrador. |
-| `schema.sql` | Esquema inicial e policies existentes. Não reaplique sobre uma instalação em uso: o arquivo original remove e recria policies nomeadas. |
-| `supabase/migrations/20261113000000_add_submission_media.sql` | Migração aditiva para tabela complementar, rate limit e policies do bucket. Não altera `places`; revise e execute manualmente. |
-| `supabase/functions/submit-place-suggestion/` | Valida, limita e grava sugestões usando segredos server-side; remove uploads quando a gravação falha. |
-| `supabase/functions/cleanup-orphaned-place-image/` | Retry seguro para remover somente fotos recentes sem referência. |
-| `supabase/functions/_shared/submission.mjs` | Helpers empacotados junto às funções para validar e limitar o corpo, e assinar a autorização temporária de limpeza. |
-| `test/lib.test.js` | Testes unitários das funções compartilhadas. |
-
-## Configuração do Supabase
-
-1. Confira em `config.js` a URL do projeto, a chave publicável (anon) e o e-mail do administrador. A chave publicável pode estar no front-end; nunca coloque a `service_role` no site.
-2. Confirme que o administrador tem uma conta no Supabase Auth com senha. `admin.html` usa e-mail e senha; `CFG.DEV_EMAIL` e a função `public.is_dev()` devem corresponder ao e-mail dessa conta.
-3. Revise e execute manualmente a migração `supabase/migrations/20261113000000_add_submission_media.sql` no SQL Editor. Ela cria tabelas complementares para descrição/foto/rejeição e limite por IP, cria o bucket privado se não existir e acrescenta policies. **Não altera `public.places` nem remove policies existentes.**
-4. Se `place-images` já existia, a migração preserva sua configuração. Confirme que está privado, aceita apenas `image/jpeg`, `image/png` e `image/webp`, e limita uploads a 5 MiB. Confirme também que o administrador autenticado corresponde a `public.is_dev()`.
-5. Publique as duas Edge Functions após revisar o código: `supabase functions deploy submit-place-suggestion` e `supabase functions deploy cleanup-orphaned-place-image`. O `supabase/config.toml` desativa a validação JWT do gateway; o envio é protegido por validação, assinatura binária e limite de requisição efetivamente lido de 5 MiB + 64 KiB. A limpeza exige um token HMAC de uso restrito ao caminho e válido por 30 minutos, assinado pelo endpoint de envio. CORS/Origin não autorizam a limpeza. A `service_role` fica somente no servidor.
-6. Configure `RATE_LIMIT_SALT` e `CLEANUP_TOKEN_SECRET` com valores aleatórios independentes de pelo menos 32 bytes. Mantenha `UNIMAP_ALLOWED_ORIGINS` alinhado ao domínio Netlify e, em desenvolvimento, `http://localhost:3000`. O runtime também precisa fornecer `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` às funções. Nunca coloque esses segredos em `config.js`. A política restritiva de Storage bloqueia upload direto por clientes anônimos; o endpoint server-side faz os uploads.
-7. Mantenha as policies existentes de `public.places`. A leitura pública continua filtrada por `approved`; a policy existente de sugestão permanece intacta. As funções criam o registro pendente por meio da credencial server-side e também criam a linha correspondente em `place_submission_details`.
-
-O bucket é privado. O público só recebe URLs temporárias de imagens ligadas a locais aprovados; o administrador autenticado pode revisar fotos pendentes. Tamanho e MIME são checados no navegador, na assinatura binária da Edge Function, nos metadados `storage.objects` e pelos limites do bucket. O limite atual é por IP e pode agrupar vários alunos que usem a mesma rede. Para exposição pública maior, acrescente Turnstile como barreira contra bots e reveja o limite para redes compartilhadas.
-
-## Acesso administrativo
-
-1. Abra `admin.html` no domínio publicado e entre com o e-mail e a senha cadastrados no Supabase Auth.
-2. Confira a imagem, o nome, a descrição e as coordenadas de cada sugestão. Use **Ver no mapa** para centralizar o ponto.
-3. Use **Aprovar** para publicar o local e sua foto. Use **Rejeitar** para manter o registro no banco, oculto do mapa público. Rejeitados podem ser reabertos para análise.
-4. As ações existentes de renomear, excluir, arrastar pinos e importar JSON permanecem disponíveis. Excluir continua sendo uma ação separada de rejeitar.
-
-## Publicação no Netlify
-
-O site é estático. Para publicação manual, use a raiz do repositório como diretório publicado e deixe o comando de build vazio. `index.html`, `admin.html`, `config.js`, `lib.js` e `campus-map.svg` devem permanecer acessíveis na raiz. A autenticação e o Storage precisam estar configurados no Supabase antes de testar o fluxo. Não é necessário executar build nem migrar os arquivos legados `script.js` e `style.css` para esta implementação.
-
-## Desenvolvimento e verificação
-
-Requer Node.js 18 ou superior.
+Requer Node.js 18 ou superior. Em `config.js`, configure a URL do projeto Supabase, a chave publicável (anon) e o e-mail usado pelo administrador. A chave publicável é própria para o frontend com RLS habilitada; nunca coloque uma chave `service_role` ou secret nesse arquivo.
 
 ```sh
+npm ci
 npm test
 npm start
 ```
 
-`npm start` serve os arquivos estáticos em `http://localhost:3000`. A geolocalização funciona em contexto seguro (HTTPS; `localhost` também é aceito pelo navegador).
+`npm start` serve a página em `http://localhost:3000`. Para testar as Edge Functions localmente, instale Deno, Supabase CLI e Docker e use `supabase functions serve`. Os testes unitários e `deno check` não precisam de secrets nem de uma conexão com o projeto Supabase.
 
-Formato de importação JSON:
+## Configuração do Supabase
+
+A migração `supabase/migrations/20261113000000_add_submission_media.sql` é aditiva: cria tabelas complementares, bucket se ausente e policies adicionais; não altera a tabela `places` nem remove policies existentes. Revise-a e aplique manualmente em um projeto de teste antes de planejar produção. Ela não foi executada nesta revisão.
+
+O bucket `place-images` deve permanecer privado e aceitar apenas JPEG, PNG e WebP, até 5 MiB. Se o bucket já existir, a migração preserva as configurações existentes; confira-as no painel. As policies filtram as fotos pendentes para o administrador e a leitura pública para locais aprovados. Mantenha as policies atuais de `public.places`; a função de envio cria registros pendentes usando credenciais apenas do servidor.
+
+## Configuração do administrador
+
+Crie a conta administrativa no Supabase Auth e use e-mail e senha no `admin.html`. O e-mail da conta deve corresponder a `CFG.DEV_EMAIL` e ao resultado de `public.is_dev()`. A verificação no navegador controla a interface; a autorização real para ler pendências e administrar dados depende de RLS e Storage policies.
+
+No painel, confira nome, descrição, foto e coordenadas antes da decisão. **Aprovar** publica o local; **Rejeitar** mantém a sugestão oculta e marcada como rejeitada; **Reabrir análise** a retorna ao estado pendente. Renomear, mover pinos, excluir e importar locais continuam disponíveis. Se excluir o registro funcionar e a remoção da foto falhar, o painel informa que o arquivo precisa ser revisado no Storage.
+
+## Secrets das Edge Functions
+
+O runtime do Supabase fornece `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`. Configure também os valores abaixo no painel de secrets das Edge Functions ou no ambiente local. Não grave valores reais no repositório:
+
+| Nome | Uso |
+|---|---|
+| `RATE_LIMIT_SALT` | Salt aleatório, com pelo menos 32 bytes, para gerar hashes de IP no limite de envios. |
+| `CLEANUP_TOKEN_SECRET` | Segredo aleatório independente, com pelo menos 32 bytes, para assinar tokens de limpeza válidos por 30 minutos e vinculados a um único caminho. |
+| `UNIMAP_ALLOWED_ORIGINS` | Lista separada por vírgulas de origens do site e dos endereços locais de desenvolvimento. É configuração CORS, não autenticação. |
+
+Para desenvolvimento local, use `supabase/functions/.env` e execute `supabase functions serve --env-file supabase/functions/.env`. O arquivo é ignorado pelo Git. Não reutilize os secrets de produção em testes locais. A `service_role` nunca deve ser enviada ao navegador.
+
+O endpoint de envio limita cada corpo a 5 MiB + 64 KiB antes de interpretar multipart e aplica até 20 envios por IP/hash por hora. A limpeza exige um token HMAC temporário emitido pelo servidor; Origin/CORS não autorizam essa ação. O bucket também deve impor limites de tipo e tamanho. Para maior exposição, adicione uma barreira contra bots e monitore o limite por rede compartilhada.
+
+## Deploy futuro
+
+O deploy não faz parte da validação local. Após revisar e testar as mudanças em um projeto Supabase separado, aplique migrações manualmente e publique as funções:
+
+```sh
+supabase functions deploy submit-place-suggestion
+supabase functions deploy cleanup-orphaned-place-image
+```
+
+Depois, publique o site estático no Netlify pela raiz do repositório, sem comando de build. Confirme que `index.html`, `admin.html`, `config.js` e `lib.js` estão disponíveis. Não coloque credenciais secretas nos arquivos publicados.
+
+## Procedimentos de teste
+
+```sh
+npm ci
+npm test
+deno check --frozen-lockfile supabase/functions/submit-place-suggestion/index.ts supabase/functions/cleanup-orphaned-place-image/index.ts
+supabase functions serve
+```
+
+`deno check` valida sintaxe, tipos e resolução dos imports. `supabase functions serve` executa as funções no runtime local e requer Docker; use somente secrets e serviços de teste. A CI executa `npm test` e `deno check` em push e pull request para esta branch. Nenhum desses comandos aplica SQL ou publica o site.
+
+Formato do JSON de importação:
 
 ```json
 [{"name":"Bloco A","cat":"Bloco","lat":-20.4065,"lng":-54.6169}]
 ```
 
-## Observação sobre arquivos legados
+## Arquivos legados
 
-`script.js`, `style.css` e `campus-map.svg` vieram de uma versão demonstrativa estática e não são carregados pela página Leaflet atual. O guia dos alunos fica em `README.txt`.
+`script.js`, `style.css` e `campus-map.svg` pertencem a uma demonstração estática antiga e não são carregados pela página Leaflet atual. Não inclua uma planta oficial da UCDB em publicações ou materiais de distribuição. O guia dos alunos fica em `README.txt`.

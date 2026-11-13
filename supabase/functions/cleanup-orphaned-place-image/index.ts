@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import {
-  MAX_CLEANUP_AGE_MS, readRequestBodyLimited, verifyCleanupToken
+  cleanupUnlinkedImage, readRequestBodyLimited, verifyCleanupToken
 } from '../_shared/submission.mjs';
 
 const BUCKET = 'place-images';
@@ -56,23 +56,29 @@ Deno.serve(async request => {
   }
 
   const admin = createClient(supabaseUrl, serviceRoleKey, {auth: {persistSession: false, autoRefreshToken: false}});
-  const {data: reference, error: referenceError} = await admin
-    .from('place_submission_details').select('place_id').eq('image_path', path).limit(1);
-  if (referenceError) return jsonResponse({error: 'Could not check photo references'}, 500, origin);
-  if (reference?.length) return jsonResponse({error: 'Photo is linked to a place'}, 409, origin);
-
-  // The capability and the object's creation time both expire after 30 minutes.
-  const {data: objects, error: objectError} = await admin.storage.from(BUCKET).list('', {search: path, limit: 2});
-  if (objectError) return jsonResponse({error: 'Could not verify uploaded photo'}, 500, origin);
-  const object = (objects || []).find(item => item.name === path);
-  if (!object) return jsonResponse({deleted: true}, 200, origin);
-  const createdAt = Date.parse(object.created_at);
-  if (!Number.isFinite(createdAt) || Date.now() - createdAt > MAX_CLEANUP_AGE_MS ||
-      createdAt > Date.now() + 60 * 1000) {
-    return jsonResponse({error: 'Photo is outside the cleanup window'}, 410, origin);
-  }
-
-  const {error: removeError} = await admin.storage.from(BUCKET).remove([path]);
-  if (removeError) return jsonResponse({error: 'Could not remove unlinked photo'}, 500, origin);
-  return jsonResponse({deleted: true}, 200, origin);
+  const outcome = await cleanupUnlinkedImage(path, {
+    findReference: async (imagePath: string) => {
+      const {data, error} = await admin.from('place_submission_details')
+        .select('place_id').eq('image_path', imagePath).limit(1);
+      return error ? {error} : {linked: Boolean(data?.length)};
+    },
+    findObject: async (imagePath: string) => {
+      const {data, error} = await admin.storage.from(BUCKET).list('', {search: imagePath, limit: 2});
+      if (error) return {error};
+      const object = (data || []).find(item => item.name === imagePath);
+      return object ? {createdAt: object.created_at} : null;
+    },
+    remove: async (imagePath: string) => {
+      const {error} = await admin.storage.from(BUCKET).remove([imagePath]);
+      return {error};
+    }
+  });
+  if (outcome.ok) return jsonResponse({deleted: true, alreadyMissing: outcome.reason === 'already_missing'}, 200, origin);
+  if (outcome.reason === 'image_linked') return jsonResponse({error: 'Photo is linked to a place'}, 409, origin);
+  if (outcome.reason === 'outside_cleanup_window') return jsonResponse({error: 'Photo is outside the cleanup window'}, 410, origin);
+  const message = outcome.reason === 'reference_check_failed' ? 'Could not check photo references'
+    : outcome.reason === 'object_check_failed' ? 'Could not verify uploaded photo'
+    : 'Could not remove unlinked photo';
+  console.error('Orphan image cleanup failed:', outcome.reason, outcome.error);
+  return jsonResponse({error: message}, 500, origin);
 });

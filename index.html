@@ -91,14 +91,17 @@
         '<a target="_blank" rel="noopener" href="' + UM.esc(UM.directionsUrl(place.lat, place.lng)) + '">Como chegar</a>';
     }
     async function loadPlaces() {
-      const [placeResult, detailsResult] = await Promise.all([
-        sb.from('places').select('*'),
-        sb.from('place_submission_details').select('place_id, description, image_path, rejected')
-      ]);
+      const placeResult = await sb.from('places').select('*').eq('approved', true);
       if (placeResult.error) { console.error('Falha ao carregar locais:', placeResult.error); return; }
+      const approvedPlaces = placeResult.data || [];
+      const detailsResult = approvedPlaces.length
+        ? await sb.from('place_submission_details')
+          .select('place_id, description, image_path, rejected')
+          .in('place_id', approvedPlaces.map(place => place.id))
+        : {data: [], error: null};
       if (detailsResult.error) { console.error('Falha ao carregar detalhes públicos:', detailsResult.error); return; }
       const detailsByPlace = new Map((detailsResult.data || []).map(item => [item.place_id, item]));
-      places = (placeResult.data || []).map(place => ({...place, ...(detailsByPlace.get(place.id) || {})}));
+      places = approvedPlaces.map(place => ({...place, ...(detailsByPlace.get(place.id) || {})}));
       for (const marker of markers.values()) marker.remove();
       markers.clear();
       for (const place of places) {
@@ -166,7 +169,7 @@
         body.set('lng', String(selectedCoords.lng));
         if (file) body.set('photo', file, file.name);
         const response = await fetch(CFG.URL + '/functions/v1/submit-place-suggestion', {
-          method: 'POST', headers: {apikey: CFG.KEY, Authorization: 'Bearer ' + CFG.KEY}, body
+          method: 'POST', headers: {apikey: CFG.KEY}, body
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) {

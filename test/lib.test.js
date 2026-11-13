@@ -43,8 +43,9 @@ test('busca e escape de HTML existentes continuam funcionando', () => {
 });
 
 test('falha na inserção da place remove a imagem já enviada', async () => {
+  const {runPlaceSubmission} = await edgeSubmission;
   const calls = [];
-  const result = await UM.runPlaceSubmission(
+  const result = await runPlaceSubmission(
     async () => ({path: 'abc.jpg'}),
     async () => ({error: new Error('insert failed')}),
     async () => { calls.push('details'); },
@@ -57,8 +58,9 @@ test('falha na inserção da place remove a imagem já enviada', async () => {
 });
 
 test('erro de upload com caminho conhecido também tenta a compensação', async () => {
+  const {runPlaceSubmission} = await edgeSubmission;
   const calls = [];
-  const result = await UM.runPlaceSubmission(
+  const result = await runPlaceSubmission(
     async () => ({path: 'uncertain-upload.jpg', error: new Error('upload response failed')}),
     async () => ({error: null}),
     async () => ({error: null}),
@@ -70,8 +72,9 @@ test('erro de upload com caminho conhecido também tenta a compensação', async
 });
 
 test('falha nos metadados reverte a place recém-criada antes de limpar a foto', async () => {
+  const {runPlaceSubmission} = await edgeSubmission;
   const calls = [];
-  const result = await UM.runPlaceSubmission(
+  const result = await runPlaceSubmission(
     async () => ({path: 'abc.png'}),
     async () => ({data: {id: 'new-place'}, error: null}),
     async () => ({error: new Error('details failed')}),
@@ -83,8 +86,9 @@ test('falha nos metadados reverte a place recém-criada antes de limpar a foto',
 });
 
 test('falha de rollback impede remover uma foto possivelmente vinculada', async () => {
+  const {runPlaceSubmission} = await edgeSubmission;
   const calls = [];
-  const result = await UM.runPlaceSubmission(
+  const result = await runPlaceSubmission(
     async () => ({path: 'abc.webp'}),
     async () => ({data: {id: 'new-place'}, error: null}),
     async () => ({error: new Error('details failed')}),
@@ -182,6 +186,22 @@ test('leitura limitada cancela corpo sem Content-Length ao exceder o limite', as
   assert.equal(cancelled, true);
 });
 
+test('corpo sem Content-Length maior que o limite de produção é recusado', async () => {
+  const {readRequestBodyLimited, MAX_REQUEST_BODY_SIZE} = await edgeSubmission;
+  const request = new Request('https://example.test/submit', {
+    method: 'POST',
+    duplex: 'half',
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_REQUEST_BODY_SIZE + 1));
+        controller.close();
+      }
+    })
+  });
+  assert.equal(request.headers.has('content-length'), false);
+  assert.deepEqual(await readRequestBodyLimited(request), {ok: false, reason: 'too_large'});
+});
+
 test('Content-Length excessivo é recusado sem ler o corpo', async () => {
   const {readRequestBodyLimited} = await edgeSubmission;
   const request = new Request('https://example.test/submit', {
@@ -196,4 +216,80 @@ test('Content-Length excessivo é recusado sem ler o corpo', async () => {
   const result = await readRequestBodyLimited(request, 4);
   assert.deepEqual(result, {ok: false, reason: 'too_large'});
   assert.equal(request.bodyUsed, false);
+});
+
+test('validação do servidor recusa imagem maior que 5 MiB e assinatura incompatível', async () => {
+  const {MAX_IMAGE_SIZE, validateImageFile} = await edgeSubmission;
+  assert.deepEqual(validateImageFile(
+    {size: 4, type: 'image/jpeg'}, new Uint8Array([0xff, 0xd8, 0xff, 0x00])
+  ), {ok: true, mimeType: 'image/jpeg'});
+  assert.equal(validateImageFile(
+    {size: MAX_IMAGE_SIZE + 1, type: 'image/jpeg'}, new Uint8Array()
+  ).reason, 'image_too_large');
+  assert.equal(validateImageFile(
+    {size: 4, type: 'image/png'}, new Uint8Array([0xff, 0xd8, 0xff, 0x00])
+  ).reason, 'image_signature_mismatch');
+  assert.equal(validateImageFile(
+    {size: 3, type: 'image/gif'}, new Uint8Array([1, 2, 3])
+  ).reason, 'unsupported_image_type');
+});
+
+test('validação do servidor recusa coordenadas inválidas e textos acima dos limites', async () => {
+  const {validateSuggestionFields} = await edgeSubmission;
+  assert.deepEqual(validateSuggestionFields(' Biblioteca ', ' Bloco central ', '-20.4', '-54.6'), {
+    ok: true, name: 'Biblioteca', description: 'Bloco central', lat: -20.4, lng: -54.6
+  });
+  assert.equal(validateSuggestionFields('Local', '', '91', '0').reason, 'invalid_coordinates');
+  assert.equal(validateSuggestionFields('X'.repeat(81), '', '-20', '-54').reason, 'text_too_long');
+  assert.equal(validateSuggestionFields('Local', 'Y'.repeat(501), '-20', '-54').reason, 'text_too_long');
+  assert.equal(validateSuggestionFields(' ', '', '-20', '-54').reason, 'missing_name');
+});
+
+test('limpeza recusa foto vinculada sem consultar Storage ou apagá-la', async () => {
+  const {cleanupUnlinkedImage} = await edgeSubmission;
+  const calls = [];
+  const result = await cleanupUnlinkedImage('photo.jpg', {
+    async findReference() { calls.push('reference'); return {linked: true}; },
+    async findObject() { calls.push('object'); return {createdAt: Date.now()}; },
+    async remove() { calls.push('remove'); }
+  });
+  assert.deepEqual(result, {ok: false, reason: 'image_linked'});
+  assert.deepEqual(calls, ['reference']);
+});
+
+test('limpeza recusa foto fora da janela de 30 minutos', async () => {
+  const {cleanupUnlinkedImage, MAX_CLEANUP_AGE_MS} = await edgeSubmission;
+  let removed = false;
+  const now = 1_800_000_000_000;
+  const result = await cleanupUnlinkedImage('old.jpg', {
+    async findReference() { return {linked: false}; },
+    async findObject() { return {createdAt: now - MAX_CLEANUP_AGE_MS - 1}; },
+    async remove() { removed = true; }
+  }, now);
+  assert.deepEqual(result, {ok: false, reason: 'outside_cleanup_window'});
+  assert.equal(removed, false);
+});
+
+test('limpeza repetida é idempotente e remove o objeto no máximo uma vez', async () => {
+  const {cleanupUnlinkedImage} = await edgeSubmission;
+  let present = true;
+  let removeCalls = 0;
+  const operations = {
+    async findReference() { return {linked: false}; },
+    async findObject() { return present ? {createdAt: Date.now()} : null; },
+    async remove() { removeCalls++; present = false; return {}; }
+  };
+  const first = await cleanupUnlinkedImage('fresh.jpg', operations);
+  const second = await cleanupUnlinkedImage('fresh.jpg', operations);
+  assert.deepEqual(first, {ok: true, reason: 'removed'});
+  assert.deepEqual(second, {ok: true, reason: 'already_missing'});
+  assert.equal(removeCalls, 1);
+});
+
+test('Edge Functions importam apenas helpers locais em _shared', () => {
+  const submit = fs.readFileSync(path.join(__dirname, '../supabase/functions/submit-place-suggestion/index.ts'), 'utf8');
+  const cleanup = fs.readFileSync(path.join(__dirname, '../supabase/functions/cleanup-orphaned-place-image/index.ts'), 'utf8');
+  assert.match(submit, /from\s+['"]\.\.\/_shared\/submission\.mjs['"]/);
+  assert.match(cleanup, /from\s+['"]\.\.\/_shared\/submission\.mjs['"]/);
+  assert.doesNotMatch(submit, /\.\.\/\.\.\/\.\.\/lib\.js/);
 });

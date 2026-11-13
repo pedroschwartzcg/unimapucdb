@@ -1,0 +1,27 @@
+name: Validate UniMap
+
+on:
+  push:
+    branches: [revisao-implementacao]
+  pull_request:
+    branches: [revisao-implementacao]
+
+permissions:
+  contents: read
+
+jobs:
+  tests-and-edge-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.6
+      - name: Type-check and resolve Edge Function imports
+        run: deno check --frozen-lockfile supabase/functions/submit-place-suggestion/index.ts supabase/functions/cleanup-orphaned-place-image/index.ts

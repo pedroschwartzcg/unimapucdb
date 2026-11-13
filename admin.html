@@ -82,7 +82,7 @@ async function init() {
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '© OpenStreetMap'}).addTo(map);
   map.on('dblclick', async e => {
     const name = (prompt('Nome do novo local:') || '').trim().slice(0, 80); if (!name) return;
-    const {error} = await sb.from('places').insert({name, cat: 'Bloco', lat: e.latlng.lat, lng: e.latlng.lng, autor: 'dev', approved: true, rejected: false});
+    const {error} = await sb.from('places').insert({name, cat: 'Bloco', lat: e.latlng.lat, lng: e.latlng.lng, autor: 'dev', approved: true});
     if (error) alert(error.message); load();
   });
   load();
@@ -145,16 +145,16 @@ $('list').onclick = async e => {
     ? sb.from('place_submission_details').update({rejected}).eq('place_id', p.id)
     : sb.from('place_submission_details').insert({place_id: p.id, description: p.description || null, image_path: p.image_path || null, rejected});
   if (d.a === 'ok') {
-    res = await sb.from('places').update({approved: true}).eq('id', p.id);
-    if (!res.error) res = await saveReviewState(false);
+    res = await saveReviewState(false);
+    if (!res.error) res = await sb.from('places').update({approved: true}).eq('id', p.id);
   }
   if (d.a === 'reject') {
-    res = await sb.from('places').update({approved: false}).eq('id', p.id);
-    if (!res.error) res = await saveReviewState(true);
+    res = await saveReviewState(true);
+    if (!res.error) res = await sb.from('places').update({approved: false}).eq('id', p.id);
   }
   if (d.a === 'reopen') {
-    res = await sb.from('places').update({approved: false}).eq('id', p.id);
-    if (!res.error) res = await saveReviewState(false);
+    res = await saveReviewState(false);
+    if (!res.error) res = await sb.from('places').update({approved: false}).eq('id', p.id);
   }
   if (d.a === 'ren') { const n = prompt('Novo nome:', p.name); if (!n) return; res = await sb.from('places').update({name: n.slice(0, 80)}).eq('id', p.id); }
   if (d.a === 'del') {

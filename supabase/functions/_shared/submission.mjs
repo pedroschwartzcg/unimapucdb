@@ -17,6 +17,35 @@ export function sniffImageMime(bytes) {
   return null;
 }
 
+export function validateSuggestionFields(rawName, rawDescription, rawLat, rawLng) {
+  if (typeof rawName !== 'string' || typeof rawLat !== 'string' || typeof rawLng !== 'string' ||
+      (rawDescription !== null && rawDescription !== undefined && typeof rawDescription !== 'string')) {
+    return {ok: false, reason: 'invalid_fields'};
+  }
+  const name = rawName.trim();
+  const description = typeof rawDescription === 'string' ? rawDescription.trim() : '';
+  if (!name) return {ok: false, reason: 'missing_name'};
+  if (name.length > 80 || description.length > 500) return {ok: false, reason: 'text_too_long'};
+  if (!rawLat.trim() || !rawLng.trim() || !validCoords(Number(rawLat), Number(rawLng))) {
+    return {ok: false, reason: 'invalid_coordinates'};
+  }
+  return {ok: true, name, description, lat: Number(rawLat), lng: Number(rawLng)};
+}
+
+export function validateImageFile(file, bytes) {
+  if (!file || !Number.isSafeInteger(file.size) || file.size <= 0) {
+    return {ok: false, reason: 'empty_image'};
+  }
+  if (file.size > MAX_IMAGE_SIZE) return {ok: false, reason: 'image_too_large'};
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    return {ok: false, reason: 'unsupported_image_type'};
+  }
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength !== file.size || sniffImageMime(bytes) !== file.type) {
+    return {ok: false, reason: 'image_signature_mismatch'};
+  }
+  return {ok: true, mimeType: file.type};
+}
+
 export async function readRequestBodyLimited(request, maximumBytes = MAX_REQUEST_BODY_SIZE) {
   const declaredLength = request.headers.get('content-length');
   if (declaredLength !== null) {
@@ -101,6 +130,33 @@ export async function verifyCleanupToken(token, expectedPath, secret, now = Date
     return crypto.subtle.verify('HMAC', key, signature, payloadBytes);
   } catch {
     return false;
+  }
+}
+
+export async function cleanupUnlinkedImage(path, operations, now = Date.now()) {
+  let reference;
+  try { reference = await operations.findReference(path); }
+  catch (error) { return {ok: false, reason: 'reference_check_failed', error}; }
+  if (reference?.error) return {ok: false, reason: 'reference_check_failed', error: reference.error};
+  if (reference?.linked) return {ok: false, reason: 'image_linked'};
+
+  let object;
+  try { object = await operations.findObject(path); }
+  catch (error) { return {ok: false, reason: 'object_check_failed', error}; }
+  if (object?.error) return {ok: false, reason: 'object_check_failed', error: object.error};
+  if (!object) return {ok: true, reason: 'already_missing'};
+
+  const createdAt = typeof object.createdAt === 'number' ? object.createdAt : Date.parse(object.createdAt);
+  if (!Number.isFinite(createdAt) || now - createdAt > MAX_CLEANUP_AGE_MS || createdAt > now + 60_000) {
+    return {ok: false, reason: 'outside_cleanup_window'};
+  }
+
+  try {
+    const removal = await operations.remove(path);
+    if (removal?.error) return {ok: false, reason: 'remove_failed', error: removal.error};
+    return {ok: true, reason: 'removed'};
+  } catch (error) {
+    return {ok: false, reason: 'remove_failed', error};
   }
 }
 

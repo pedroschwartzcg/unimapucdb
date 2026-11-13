@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import {
-  createCleanupToken, MAX_IMAGE_SIZE, MAX_REQUEST_BODY_SIZE, readRequestBodyLimited,
-  runPlaceSubmission, sniffImageMime, validCoords
+  createCleanupToken, MAX_REQUEST_BODY_SIZE, readRequestBodyLimited,
+  runPlaceSubmission, validateImageFile, validateSuggestionFields
 } from '../_shared/submission.mjs';
 
 const BUCKET = 'place-images';
@@ -72,38 +72,37 @@ Deno.serve(async request => {
     form = await boundedRequest.formData();
   }
   catch { return jsonResponse({error: 'Invalid form data'}, 400, origin); }
-  const rawName = form.get('name');
-  const rawDescription = form.get('description');
-  const rawLat = form.get('lat');
-  const rawLng = form.get('lng');
-  if (typeof rawName !== 'string' || typeof rawLat !== 'string' || typeof rawLng !== 'string') {
-    return jsonResponse({error: 'Nome ou coordenadas inválidas.'}, 400, origin);
+  const fields = validateSuggestionFields(form.get('name'), form.get('description'),
+    form.get('lat'), form.get('lng'));
+  if (!fields.ok) {
+    const message = fields.reason === 'text_too_long' ? 'Nome ou descrição acima do limite permitido.'
+      : fields.reason === 'missing_name' ? 'Informe o nome do local.'
+      : fields.reason === 'invalid_coordinates' ? 'Marque uma localização válida no mapa.'
+      : 'Nome ou coordenadas inválidas.';
+    return jsonResponse({error: message}, 400, origin);
   }
-  if (rawDescription !== null && typeof rawDescription !== 'string') {
-    return jsonResponse({error: 'Descrição inválida.'}, 400, origin);
-  }
-  const name = rawName.trim();
-  const description = typeof rawDescription === 'string' ? rawDescription.trim() : '';
-  const lat = Number(rawLat);
-  const lng = Number(rawLng);
-  if (!name || name.length > 80 || description.length > 500 || !rawLat.trim() || !rawLng.trim() || !validCoords(lat, lng)) {
-    return jsonResponse({error: 'Nome, descrição ou coordenadas inválidas.'}, 400, origin);
-  }
+  const {name, description, lat, lng} = fields;
 
   let file: File | null = null;
   const suppliedFile = form.get('photo');
+  if (suppliedFile !== null && !(suppliedFile instanceof File)) {
+    return jsonResponse({error: 'Arquivo de foto inválido.'}, 400, origin);
+  }
   if (suppliedFile instanceof File) {
     if (suppliedFile.size === 0) return jsonResponse({error: 'A foto selecionada está vazia.'}, 400, origin);
     file = suppliedFile;
   }
-  if (file && (file.size > MAX_IMAGE_SIZE || !MIME_EXTENSION[file.type])) {
-    return jsonResponse({error: 'A foto deve ser JPG, PNG ou WebP e ter no máximo 5 MB.'}, 400, origin);
-  }
   let bytes: Uint8Array | null = null;
   if (file) {
     bytes = new Uint8Array(await file.arrayBuffer());
-    if (sniffImageMime(bytes) !== file.type) {
-      return jsonResponse({error: 'O conteúdo da foto não corresponde ao formato declarado.'}, 400, origin);
+    const imageValidation = validateImageFile(file, bytes);
+    if (!imageValidation.ok) {
+      const message = imageValidation.reason === 'image_too_large'
+        ? 'A foto deve ter no máximo 5 MB.'
+        : imageValidation.reason === 'image_signature_mismatch'
+          ? 'O conteúdo da foto não corresponde ao formato declarado.'
+          : 'A foto deve ser JPG, PNG ou WebP.';
+      return jsonResponse({error: message}, 400, origin);
     }
   }
 
